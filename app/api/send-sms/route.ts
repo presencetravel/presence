@@ -3,9 +3,9 @@ import twilio from 'twilio'
 
 export async function POST(req: NextRequest) {
   try {
-    const { travelerName, travelerPhone, gameDate, tripLink } = await req.json()
+    const { travelerName, travelerPhone, tripDate, tripLink } = await req.json()
 
-    if (!travelerName || !travelerPhone || !gameDate || !tripLink) {
+    if (!travelerName || !travelerPhone || !tripDate || !tripLink) {
       return NextResponse.json(
         { error: 'missing required fields' },
         { status: 400 }
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
 
     const client = twilio(accountSid, authToken)
 
-    const message = `hey ${travelerName}! you've been booked on a flight for a game on ${gameDate}. tap to confirm your details and you're all set. ${tripLink}`
+    const message = `hey ${travelerName}! someone wants to fly you out for a trip on ${tripDate}. tap the link to pick your flight — it only takes a minute. ${tripLink}`
 
     await client.messages.create({
       body: message,

@@ -1,35 +1,89 @@
 'use client'
-
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
+
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  backgroundColor: '#111111',
+  border: '1px solid #1e1e1e',
+  borderRadius: '11px',
+  padding: '16px',
+  color: '#ffffff',
+  fontSize: '15px',
+  outline: 'none',
+  boxSizing: 'border-box',
+}
 
 export default function SMSPage() {
   const router = useRouter()
-
   const [travelerName, setTravelerName] = useState('')
   const [travelerPhone, setTravelerPhone] = useState('')
+  const [tripDate, setTripDate] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const toE164 = (phone: string) => {
+    const digits = phone.replace(/\D/g, '')
+    return digits.length === 10 ? `+1${digits}` : `+${digits}`
+  }
 
   const handleSend = async () => {
     setError(null)
 
-    if (!travelerName.trim() || !travelerPhone.trim()) {
-      setError('please enter a name and phone number')
+    if (!travelerName.trim() || !travelerPhone.trim() || !tripDate.trim()) {
+      setError('please fill in all fields')
       return
     }
 
     setLoading(true)
 
     try {
+      // get current athlete session
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        setError('you must be logged in to send a trip request')
+        setLoading(false)
+        return
+      }
+
+      // create trip request in supabase
+      const { data: tripRequest, error: dbError } = await supabase
+        .from('trip_requests')
+        .insert({
+          athlete_id: session.user.id,
+          traveler_name: travelerName.trim(),
+          traveler_phone: toE164(travelerPhone),
+          trip_date: tripDate.trim(),
+          status: 'pending',
+        })
+        .select()
+        .single()
+
+      if (dbError || !tripRequest) {
+        setError('could not create trip request. please try again.')
+        setLoading(false)
+        return
+      }
+
+      // build the traveler link
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin
+      const tripLink = `${baseUrl}/request/${tripRequest.id}`
+
+      // send sms
       const res = await fetch('/api/send-sms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          travelerName,
-          travelerPhone,
-          gameDate: 'april 5, 2025',
-          tripLink: 'https://presence.app/trip/abc123',
+          travelerName: travelerName.trim(),
+          travelerPhone: toE164(travelerPhone),
+          tripDate: tripDate.trim(),
+          tripLink,
         }),
       })
 
@@ -37,6 +91,7 @@ export default function SMSPage() {
 
       if (!res.ok) {
         setError(data.error || 'something went wrong. please try again.')
+        setLoading(false)
         return
       }
 
@@ -92,7 +147,7 @@ export default function SMSPage() {
             margin: '8px 0 0',
           }}
         >
-          they'll get a text with everything they need
+          they'll get a text with a link to pick their flight
         </p>
       </div>
 
@@ -110,6 +165,17 @@ export default function SMSPage() {
           value={travelerPhone}
           onChange={(e) => setTravelerPhone(e.target.value)}
           style={inputStyle}
+        />
+        <input
+          type="date"
+          placeholder="trip date"
+          value={tripDate}
+          onChange={(e) => setTripDate(e.target.value)}
+          style={{
+            ...inputStyle,
+            color: tripDate ? '#ffffff' : '#6b6b6b',
+            colorScheme: 'dark',
+          }}
         />
       </div>
 
@@ -146,16 +212,4 @@ export default function SMSPage() {
       </button>
     </main>
   )
-}
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  backgroundColor: '#111111',
-  border: '1px solid #1e1e1e',
-  borderRadius: '11px',
-  padding: '16px',
-  color: '#ffffff',
-  fontSize: '15px',
-  outline: 'none',
-  boxSizing: 'border-box',
 }
