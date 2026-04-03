@@ -4,6 +4,12 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { stripePromise } from '@/lib/stripe';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 type Flight = {
   id: string;
@@ -111,7 +117,7 @@ function PaymentSheet({ flight, insurance, onClose, onSuccess }: {
 
 function BookPage() {
   const router = useRouter();
-  const [mode, setMode] = useState<'game' | 'visit'>('game');
+  const [mode, setMode] = useState<'book' | 'delegate'>('book');
   const [flights, setFlights] = useState<Flight[]>([]);
   const [selectedFlight, setSelectedFlight] = useState<Flight | null>(null);
   const [sort, setSort] = useState('best');
@@ -132,6 +138,13 @@ function BookPage() {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
 
+  // delegate mode state
+  const [travelerName, setTravelerName] = useState('');
+  const [travelerPhone, setTravelerPhone] = useState('');
+  const [tripDate, setTripDate] = useState('');
+  const [delegateLoading, setDelegateLoading] = useState(false);
+  const [delegateError, setDelegateError] = useState('');
+
   const airports = [
     {c:'ATL',n:'atlanta'},{c:'AUS',n:'austin'},{c:'BNA',n:'nashville'},{c:'BOS',n:'boston'},
     {c:'CLT',n:'charlotte'},{c:'DCA',n:'washington reagan'},{c:'DEN',n:'denver'},{c:'DFW',n:'dallas fort worth'},
@@ -145,6 +158,11 @@ function BookPage() {
 
   const filteredFrom = airports.filter(a => a.n.includes(fromSearch.toLowerCase()) || a.c.toLowerCase().includes(fromSearch.toLowerCase())).slice(0, 4);
   const filteredTo = airports.filter(a => a.n.includes(toSearch.toLowerCase()) || a.c.toLowerCase().includes(toSearch.toLowerCase())).slice(0, 4);
+
+  const toE164 = (phone: string) => {
+    const digits = phone.replace(/\D/g, '');
+    return digits.length === 10 ? `+1${digits}` : `+${digits}`;
+  };
 
   const searchFlights = async () => {
     setSearching(true);
@@ -190,6 +208,67 @@ function BookPage() {
     }
   };
 
+  const handleDelegate = async () => {
+    if (!travelerName.trim() || !travelerPhone.trim() || !tripDate.trim()) {
+      setDelegateError('please fill in all fields');
+      return;
+    }
+    setDelegateLoading(true);
+    setDelegateError('');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setDelegateError('you must be logged in');
+        setDelegateLoading(false);
+        return;
+      }
+
+      const { data: tripRequest, error: dbError } = await supabase
+        .from('trip_requests')
+        .insert({
+          athlete_id: session.user.id,
+          traveler_name: travelerName.trim(),
+          traveler_phone: toE164(travelerPhone),
+          trip_date: tripDate.trim(),
+          status: 'pending',
+        })
+        .select()
+        .single();
+
+      if (dbError || !tripRequest) {
+        setDelegateError('could not create trip request. please try again.');
+        setDelegateLoading(false);
+        return;
+      }
+
+      const tripLink = `${window.location.origin}/request/${tripRequest.id}`;
+
+      const res = await fetch('/api/send-sms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          travelerName: travelerName.trim(),
+          travelerPhone: toE164(travelerPhone),
+          tripDate: tripDate.trim(),
+          tripLink,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setDelegateError(data.error || 'something went wrong. please try again.');
+        setDelegateLoading(false);
+        return;
+      }
+
+      router.push('/confirm');
+    } catch {
+      setDelegateError('network error. please try again.');
+    } finally {
+      setDelegateLoading(false);
+    }
+  };
+
   const getSortedFlights = () => {
     let sorted = [...flights];
     if (sort === 'cheapest') sorted.sort((a, b) => a.price - b.price);
@@ -206,160 +285,208 @@ function BookPage() {
     <div style={{ background: '#080808', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ width: '100%', maxWidth: '390px', minHeight: '100vh', background: '#080808', position: 'relative', padding: '16px 16px 80px' }}>
 
+        {/* header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
           <div onClick={() => router.back()} style={{ width: '26px', height: '26px', background: 'rgba(255,255,255,0.06)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: 'rgba(255,255,255,0.4)', cursor: 'pointer' }}>←</div>
           <h3 style={{ fontSize: '14px', fontWeight: 500, color: '#fff' }}>book a flight</h3>
         </div>
 
-        <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: '100px', padding: '3px', marginBottom: '12px' }}>
-          {(['game', 'visit'] as const).map(m => (
-            <div key={m} onClick={() => setMode(m)} style={{ flex: 1, textAlign: 'center', padding: '7px 0', borderRadius: '100px', fontSize: '11px', cursor: 'pointer', background: mode === m ? '#1A6EFF' : 'transparent', color: mode === m ? '#fff' : 'rgba(255,255,255,0.35)', fontWeight: mode === m ? 500 : 400 }}>
-              {m === 'game' ? 'game trip' : 'weekend visit'}
+        {/* mode toggle */}
+        <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: '100px', padding: '3px', marginBottom: '20px' }}>
+          {(['book', 'delegate'] as const).map(m => (
+            <div
+              key={m}
+              onClick={() => {
+                setMode(m);
+                setFlights([]);
+                setSelectedFlight(null);
+                setSearchError('');
+                setDelegateError('');
+              }}
+              style={{ flex: 1, textAlign: 'center', padding: '7px 0', borderRadius: '100px', fontSize: '11px', cursor: 'pointer', background: mode === m ? '#1A6EFF' : 'transparent', color: mode === m ? '#fff' : 'rgba(255,255,255,0.35)', fontWeight: mode === m ? 500 : 400 }}
+            >
+              {m === 'book' ? "i'll book it" : 'let them pick'}
             </div>
           ))}
         </div>
 
-        {/* airport selectors */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-          <div style={{ flex: 1 }}>
-            <div onClick={() => { setShowFromSearch(!showFromSearch); setShowToSearch(false); }} style={{ background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: '11px', padding: '8px 10px', cursor: 'pointer' }}>
-              <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', marginBottom: '2px' }}>from</div>
-              <div style={{ fontSize: '13px', fontWeight: 500, color: '#fff' }}>{fromCity}</div>
-            </div>
-            {showFromSearch && (
-              <div style={{ marginTop: '4px' }}>
-                <input value={fromSearch} onChange={e => setFromSearch(e.target.value)} placeholder="search airport..." autoFocus style={{ width: '100%', background: '#141414', border: '0.5px solid #1A6EFF', color: '#fff', padding: '8px 10px', borderRadius: '10px', fontSize: '11px', outline: 'none', boxSizing: 'border-box' }} />
-                {filteredFrom.map(a => (
-                  <div key={a.c} onClick={() => { setFromCity(a.c); setShowFromSearch(false); setFromSearch(''); }} style={{ padding: '8px 10px', fontSize: '11px', color: 'rgba(255,255,255,0.7)', background: '#141414', borderBottom: '0.5px solid rgba(255,255,255,0.05)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>{a.n}</span><span style={{ color: '#1A6EFF', fontWeight: 500 }}>{a.c}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: '12px' }}>→</div>
-          <div style={{ flex: 1 }}>
-            <div onClick={() => { setShowToSearch(!showToSearch); setShowFromSearch(false); }} style={{ background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: '11px', padding: '8px 10px', cursor: 'pointer' }}>
-              <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', marginBottom: '2px' }}>to</div>
-              <div style={{ fontSize: '13px', fontWeight: 500, color: '#fff' }}>{toCity}</div>
-            </div>
-            {showToSearch && (
-              <div style={{ marginTop: '4px' }}>
-                <input value={toSearch} onChange={e => setToSearch(e.target.value)} placeholder="search airport..." autoFocus style={{ width: '100%', background: '#141414', border: '0.5px solid #1A6EFF', color: '#fff', padding: '8px 10px', borderRadius: '10px', fontSize: '11px', outline: 'none', boxSizing: 'border-box' }} />
-                {filteredTo.map(a => (
-                  <div key={a.c} onClick={() => { setToCity(a.c); setShowToSearch(false); setToSearch(''); }} style={{ padding: '8px 10px', fontSize: '11px', color: 'rgba(255,255,255,0.7)', background: '#141414', borderBottom: '0.5px solid rgba(255,255,255,0.05)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>{a.n}</span><span style={{ color: '#1A6EFF', fontWeight: 500 }}>{a.c}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* date + search */}
-        <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
-          <div style={{ flex: 1, background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: '11px', padding: '8px 10px' }}>
-            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', marginBottom: '2px' }}>depart</div>
-            <input
-              type="date"
-              value={depart}
-              onChange={e => setDepart(e.target.value)}
-              style={{ background: 'transparent', border: 'none', color: '#fff', fontSize: '13px', fontWeight: 500, outline: 'none', width: '100%' }}
-            />
-          </div>
-          <button
-            onClick={searchFlights}
-            disabled={searching}
-            style={{ background: '#1A6EFF', color: '#fff', border: 'none', borderRadius: '11px', padding: '0 16px', fontSize: '12px', fontWeight: 500, cursor: searching ? 'not-allowed' : 'pointer', opacity: searching ? 0.6 : 1, whiteSpace: 'nowrap' }}
-          >
-            {searching ? 'searching...' : 'search'}
-          </button>
-        </div>
-
-        {/* error */}
-        {searchError && (
-          <div style={{ fontSize: '11px', color: '#FF3B30', marginBottom: '10px' }}>{searchError}</div>
-        )}
-
-        {/* empty state */}
-        {!searching && flights.length === 0 && !searchError && (
-          <div style={{ textAlign: 'center', padding: '30px 0', color: 'rgba(255,255,255,0.2)', fontSize: '12px' }}>
-            pick your airports and date, then tap search
-          </div>
-        )}
-
-        {/* loading state */}
-        {searching && (
-          <div style={{ textAlign: 'center', padding: '30px 0', color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>
-            finding the best flights...
-          </div>
-        )}
-
-        {/* sort pills */}
-        {flights.length > 0 && (
-          <div style={{ display: 'flex', gap: '5px', marginBottom: '10px', overflowX: 'auto', paddingBottom: '2px' }}>
-            {['best', 'cheapest', 'fastest', 'nonstop'].map(s => (
-              <div key={s} onClick={() => setSort(s)} style={{ background: sort === s ? 'rgba(26,110,255,0.15)' : 'rgba(255,255,255,0.05)', border: `0.5px solid ${sort === s ? '#1A6EFF' : 'rgba(255,255,255,0.1)'}`, color: sort === s ? '#1A6EFF' : 'rgba(255,255,255,0.4)', padding: '5px 11px', borderRadius: '100px', fontSize: '10px', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                {s}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* flight results */}
-        {flights.length > 0 && (
-          <div style={{ maxHeight: '200px', overflowY: 'auto', marginBottom: '10px' }}>
-            {getSortedFlights().map(f => (
-              <div key={f.id} onClick={() => setSelectedFlight(f)} style={{ background: selectedFlight?.id === f.id ? 'rgba(26,110,255,0.07)' : 'rgba(255,255,255,0.04)', border: `0.5px solid ${selectedFlight?.id === f.id ? '#1A6EFF' : 'rgba(255,255,255,0.08)'}`, borderRadius: '12px', padding: '9px 10px', marginBottom: '6px', cursor: 'pointer' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div style={{ fontSize: '11px', fontWeight: 500, color: '#fff' }}>{f.airline}</div>
-                  <div style={{ fontSize: '13px', fontWeight: 500, color: '#1A6EFF' }}>${f.price.toFixed(2)}</div>
-                </div>
-                <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginTop: '2px' }}>{f.type} · {f.duration}</div>
-                {f.badge && <div style={{ fontSize: '9px', background: 'rgba(26,110,255,0.12)', color: '#1A6EFF', padding: '2px 7px', borderRadius: '100px', display: 'inline-block', marginTop: '3px' }}>{f.badge}</div>}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* insurance + totals */}
-        {selectedFlight && (
+        {/* i'll book it mode */}
+        {mode === 'book' && (
           <>
-            <div style={{ borderTop: '0.5px solid rgba(255,255,255,0.07)', padding: '8px 0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontSize: '11px', fontWeight: 500, color: '#fff' }}>trip insurance</div>
-                  <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>covers cancellations & delays</div>
+            {/* airport selectors */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+              <div style={{ flex: 1 }}>
+                <div onClick={() => { setShowFromSearch(!showFromSearch); setShowToSearch(false); }} style={{ background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: '11px', padding: '8px 10px', cursor: 'pointer' }}>
+                  <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', marginBottom: '2px' }}>from</div>
+                  <div style={{ fontSize: '13px', fontWeight: 500, color: '#fff' }}>{fromCity}</div>
                 </div>
-                <div onClick={() => insurance ? setShowInsModal(true) : setInsurance(true)} style={{ width: '32px', height: '18px', background: insurance ? '#1A6EFF' : 'rgba(255,255,255,0.1)', borderRadius: '100px', position: 'relative', cursor: 'pointer' }}>
-                  <div style={{ width: '12px', height: '12px', background: '#fff', borderRadius: '50%', position: 'absolute', top: '3px', right: insurance ? '3px' : 'auto', left: insurance ? 'auto' : '3px' }}></div>
+                {showFromSearch && (
+                  <div style={{ marginTop: '4px' }}>
+                    <input value={fromSearch} onChange={e => setFromSearch(e.target.value)} placeholder="search airport..." autoFocus style={{ width: '100%', background: '#141414', border: '0.5px solid #1A6EFF', color: '#fff', padding: '8px 10px', borderRadius: '10px', fontSize: '11px', outline: 'none', boxSizing: 'border-box' }} />
+                    {filteredFrom.map(a => (
+                      <div key={a.c} onClick={() => { setFromCity(a.c); setShowFromSearch(false); setFromSearch(''); }} style={{ padding: '8px 10px', fontSize: '11px', color: 'rgba(255,255,255,0.7)', background: '#141414', borderBottom: '0.5px solid rgba(255,255,255,0.05)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>{a.n}</span><span style={{ color: '#1A6EFF', fontWeight: 500 }}>{a.c}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: '12px' }}>→</div>
+              <div style={{ flex: 1 }}>
+                <div onClick={() => { setShowToSearch(!showToSearch); setShowFromSearch(false); }} style={{ background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: '11px', padding: '8px 10px', cursor: 'pointer' }}>
+                  <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', marginBottom: '2px' }}>to</div>
+                  <div style={{ fontSize: '13px', fontWeight: 500, color: '#fff' }}>{toCity}</div>
                 </div>
+                {showToSearch && (
+                  <div style={{ marginTop: '4px' }}>
+                    <input value={toSearch} onChange={e => setToSearch(e.target.value)} placeholder="search airport..." autoFocus style={{ width: '100%', background: '#141414', border: '0.5px solid #1A6EFF', color: '#fff', padding: '8px 10px', borderRadius: '10px', fontSize: '11px', outline: 'none', boxSizing: 'border-box' }} />
+                    {filteredTo.map(a => (
+                      <div key={a.c} onClick={() => { setToCity(a.c); setShowToSearch(false); setToSearch(''); }} style={{ padding: '8px 10px', fontSize: '11px', color: 'rgba(255,255,255,0.7)', background: '#141414', borderBottom: '0.5px solid rgba(255,255,255,0.05)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>{a.n}</span><span style={{ color: '#1A6EFF', fontWeight: 500 }}>{a.c}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
-            <div style={{ borderTop: '0.5px solid rgba(255,255,255,0.07)', padding: '8px 0 12px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>flight</span>
-                <span style={{ fontSize: '11px', color: '#fff' }}>${selectedFlight.price.toFixed(2)}</span>
+            {/* date + search */}
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+              <div style={{ flex: 1, background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: '11px', padding: '8px 10px' }}>
+                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', marginBottom: '2px' }}>depart</div>
+                <input type="date" value={depart} onChange={e => setDepart(e.target.value)} style={{ background: 'transparent', border: 'none', color: '#fff', fontSize: '13px', fontWeight: 500, outline: 'none', width: '100%' }} />
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>convenience fee (8%)</span>
-                <span style={{ fontSize: '11px', color: '#fff' }}>${fee.toFixed(2)}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', opacity: insurance ? 1 : 0.3 }}>
-                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>trip insurance</span>
-                <span style={{ fontSize: '11px', color: '#fff' }}>${ins.toFixed(2)}</span>
-              </div>
-              <div style={{ borderTop: '0.5px solid rgba(255,255,255,0.07)', marginTop: '6px', paddingTop: '6px', display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '12px', fontWeight: 500, color: '#fff' }}>total</span>
-                <span style={{ fontSize: '14px', fontWeight: 500, color: '#fff' }}>${total.toFixed(2)}</span>
-              </div>
+              <button onClick={searchFlights} disabled={searching} style={{ background: '#1A6EFF', color: '#fff', border: 'none', borderRadius: '11px', padding: '0 16px', fontSize: '12px', fontWeight: 500, cursor: searching ? 'not-allowed' : 'pointer', opacity: searching ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+                {searching ? 'searching...' : 'search'}
+              </button>
             </div>
 
-            <button onClick={() => setShowPayment(true)} style={{ width: '100%', background: '#1A6EFF', color: '#fff', border: 'none', padding: '13px', borderRadius: '100px', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>
-              next — send to traveler
-            </button>
+            {searchError && <div style={{ fontSize: '11px', color: '#FF3B30', marginBottom: '10px' }}>{searchError}</div>}
+
+            {!searching && flights.length === 0 && !searchError && (
+              <div style={{ textAlign: 'center', padding: '30px 0', color: 'rgba(255,255,255,0.2)', fontSize: '12px' }}>
+                pick your airports and date, then tap search
+              </div>
+            )}
+
+            {searching && (
+              <div style={{ textAlign: 'center', padding: '30px 0', color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>
+                finding the best flights...
+              </div>
+            )}
+
+            {flights.length > 0 && (
+              <div style={{ display: 'flex', gap: '5px', marginBottom: '10px', overflowX: 'auto', paddingBottom: '2px' }}>
+                {['best', 'cheapest', 'fastest', 'nonstop'].map(s => (
+                  <div key={s} onClick={() => setSort(s)} style={{ background: sort === s ? 'rgba(26,110,255,0.15)' : 'rgba(255,255,255,0.05)', border: `0.5px solid ${sort === s ? '#1A6EFF' : 'rgba(255,255,255,0.1)'}`, color: sort === s ? '#1A6EFF' : 'rgba(255,255,255,0.4)', padding: '5px 11px', borderRadius: '100px', fontSize: '10px', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                    {s}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {flights.length > 0 && (
+              <div style={{ maxHeight: '200px', overflowY: 'auto', marginBottom: '10px' }}>
+                {getSortedFlights().map(f => (
+                  <div key={f.id} onClick={() => setSelectedFlight(f)} style={{ background: selectedFlight?.id === f.id ? 'rgba(26,110,255,0.07)' : 'rgba(255,255,255,0.04)', border: `0.5px solid ${selectedFlight?.id === f.id ? '#1A6EFF' : 'rgba(255,255,255,0.08)'}`, borderRadius: '12px', padding: '9px 10px', marginBottom: '6px', cursor: 'pointer' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div style={{ fontSize: '11px', fontWeight: 500, color: '#fff' }}>{f.airline}</div>
+                      <div style={{ fontSize: '13px', fontWeight: 500, color: '#1A6EFF' }}>${f.price.toFixed(2)}</div>
+                    </div>
+                    <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginTop: '2px' }}>{f.type} · {f.duration}</div>
+                    {f.badge && <div style={{ fontSize: '9px', background: 'rgba(26,110,255,0.12)', color: '#1A6EFF', padding: '2px 7px', borderRadius: '100px', display: 'inline-block', marginTop: '3px' }}>{f.badge}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {selectedFlight && (
+              <>
+                <div style={{ borderTop: '0.5px solid rgba(255,255,255,0.07)', padding: '8px 0' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: '11px', fontWeight: 500, color: '#fff' }}>trip insurance</div>
+                      <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>covers cancellations & delays</div>
+                    </div>
+                    <div onClick={() => insurance ? setShowInsModal(true) : setInsurance(true)} style={{ width: '32px', height: '18px', background: insurance ? '#1A6EFF' : 'rgba(255,255,255,0.1)', borderRadius: '100px', position: 'relative', cursor: 'pointer' }}>
+                      <div style={{ width: '12px', height: '12px', background: '#fff', borderRadius: '50%', position: 'absolute', top: '3px', right: insurance ? '3px' : 'auto', left: insurance ? 'auto' : '3px' }}></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ borderTop: '0.5px solid rgba(255,255,255,0.07)', padding: '8px 0 12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
+                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>flight</span>
+                    <span style={{ fontSize: '11px', color: '#fff' }}>${selectedFlight.price.toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
+                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>convenience fee (8%)</span>
+                    <span style={{ fontSize: '11px', color: '#fff' }}>${fee.toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', opacity: insurance ? 1 : 0.3 }}>
+                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>trip insurance</span>
+                    <span style={{ fontSize: '11px', color: '#fff' }}>${ins.toFixed(2)}</span>
+                  </div>
+                  <div style={{ borderTop: '0.5px solid rgba(255,255,255,0.07)', marginTop: '6px', paddingTop: '6px', display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 500, color: '#fff' }}>total</span>
+                    <span style={{ fontSize: '14px', fontWeight: 500, color: '#fff' }}>${total.toFixed(2)}</span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => router.push('/sms')}
+                  style={{ width: '100%', background: '#1A6EFF', color: '#fff', border: 'none', padding: '13px', borderRadius: '100px', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}
+                >
+                  next — get traveler info
+                </button>
+              </>
+            )}
           </>
+        )}
+
+        {/* let them pick mode */}
+        {mode === 'delegate' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: '0 0 4px', lineHeight: 1.6 }}>
+              enter their info and we'll send them a link to pick their own flight. you'll review and pay once they choose.
+            </p>
+
+            <input
+              type="text"
+              placeholder="traveler name"
+              value={travelerName}
+              onChange={e => setTravelerName(e.target.value)}
+              style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: '11px', padding: '12px 14px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+            />
+
+            <input
+              type="tel"
+              placeholder="phone number"
+              value={travelerPhone}
+              onChange={e => setTravelerPhone(e.target.value)}
+              style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: '11px', padding: '12px 14px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+            />
+
+            <div style={{ background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: '11px', padding: '8px 14px' }}>
+              <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', marginBottom: '2px' }}>trip date</div>
+              <input
+                type="date"
+                value={tripDate}
+                onChange={e => setTripDate(e.target.value)}
+                style={{ background: 'transparent', border: 'none', color: tripDate ? '#fff' : 'rgba(255,255,255,0.3)', fontSize: '13px', fontWeight: 500, outline: 'none', width: '100%', colorScheme: 'dark' }}
+              />
+            </div>
+
+            {delegateError && <div style={{ fontSize: '11px', color: '#FF3B30' }}>{delegateError}</div>}
+
+            <button
+              onClick={handleDelegate}
+              disabled={delegateLoading}
+              style={{ width: '100%', background: delegateLoading ? 'rgba(26,110,255,0.5)' : '#1A6EFF', color: '#fff', border: 'none', padding: '14px', borderRadius: '100px', fontSize: '13px', fontWeight: 500, cursor: delegateLoading ? 'not-allowed' : 'pointer', marginTop: '8px' }}
+            >
+              {delegateLoading ? 'sending...' : 'send link to traveler'}
+            </button>
+          </div>
         )}
 
         {/* insurance modal */}
