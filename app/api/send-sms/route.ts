@@ -3,7 +3,7 @@ import twilio from 'twilio'
 
 export async function POST(req: NextRequest) {
   try {
-    const { travelerName, travelerPhone, tripDate, tripLink } = await req.json()
+    const { travelerName, travelerPhone, tripDate, tripLink, mode } = await req.json()
 
     if (!travelerName || !travelerPhone || !tripDate || !tripLink) {
       return NextResponse.json(
@@ -25,7 +25,10 @@ export async function POST(req: NextRequest) {
 
     const client = twilio(accountSid, authToken)
 
-    const message = `hey ${travelerName}! someone wants to fly you out for a trip on ${tripDate}. tap the link to pick your flight — it only takes a minute. ${tripLink}`
+    // different message depending on which flow triggered the sms
+    const message = mode === 'book'
+      ? `hey ${travelerName}! you've been booked on a flight for a trip on ${tripDate}. tap the link to enter your travel info — it only takes a minute. ${tripLink}`
+      : `hey ${travelerName}! someone wants to fly you out for a trip on ${tripDate}. tap the link to pick your flight — it only takes a minute. ${tripLink}`
 
     await client.messages.create({
       body: message,

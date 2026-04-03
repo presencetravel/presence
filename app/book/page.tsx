@@ -138,12 +138,18 @@ function BookPage() {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
 
-  // delegate mode state
+  // shared traveler info for both flows
   const [travelerName, setTravelerName] = useState('');
   const [travelerPhone, setTravelerPhone] = useState('');
+
+  // delegate mode state
   const [tripDate, setTripDate] = useState('');
   const [delegateLoading, setDelegateLoading] = useState(false);
   const [delegateError, setDelegateError] = useState('');
+
+  // i'll book it mode state
+  const [bookItLoading, setBookItLoading] = useState(false);
+  const [bookItError, setBookItError] = useState('');
 
   const airports = [
     {c:'ATL',n:'atlanta'},{c:'AUS',n:'austin'},{c:'BNA',n:'nashville'},{c:'BOS',n:'boston'},
@@ -208,6 +214,77 @@ function BookPage() {
     }
   };
 
+  const handleBookItNext = async () => {
+    if (!selectedFlight) return;
+    if (!travelerName.trim() || !travelerPhone.trim()) {
+      setBookItError('please enter traveler name and phone number');
+      return;
+    }
+    setBookItLoading(true);
+    setBookItError('');
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setBookItError('you must be logged in');
+        setBookItLoading(false);
+        return;
+      }
+
+      const fee = Math.round(selectedFlight.price * 0.08 * 100) / 100;
+      const ins = insurance ? 12 : 0;
+      const total = selectedFlight.price + fee + ins;
+
+      const { data: tripRequest, error: dbError } = await supabase
+        .from('trip_requests')
+        .insert({
+          athlete_id: session.user.id,
+          traveler_name: travelerName.trim(),
+          traveler_phone: toE164(travelerPhone),
+          trip_date: depart,
+          status: 'pending',
+          selected_offer_id: selectedFlight.id,
+          selected_offer_data: selectedFlight,
+          total_amount: total,
+        })
+        .select()
+        .single();
+
+      if (dbError || !tripRequest) {
+        setBookItError('could not create trip. please try again.');
+        setBookItLoading(false);
+        return;
+      }
+
+      const tripLink = `${window.location.origin}/traveler-info/${tripRequest.id}`;
+
+      const res = await fetch('/api/send-sms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          travelerName: travelerName.trim(),
+          travelerPhone: toE164(travelerPhone),
+          tripDate: depart,
+          tripLink,
+          mode: 'book',
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setBookItError(data.error || 'something went wrong. please try again.');
+        setBookItLoading(false);
+        return;
+      }
+
+      router.push('/confirm');
+    } catch {
+      setBookItError('network error. please try again.');
+    } finally {
+      setBookItLoading(false);
+    }
+  };
+
   const handleDelegate = async () => {
     if (!travelerName.trim() || !travelerPhone.trim() || !tripDate.trim()) {
       setDelegateError('please fill in all fields');
@@ -251,6 +328,7 @@ function BookPage() {
           travelerPhone: toE164(travelerPhone),
           tripDate: tripDate.trim(),
           tripLink,
+          mode: 'delegate',
         }),
       });
 
@@ -302,6 +380,9 @@ function BookPage() {
                 setSelectedFlight(null);
                 setSearchError('');
                 setDelegateError('');
+                setBookItError('');
+                setTravelerName('');
+                setTravelerPhone('');
               }}
               style={{ flex: 1, textAlign: 'center', padding: '7px 0', borderRadius: '100px', fontSize: '11px', cursor: 'pointer', background: mode === m ? '#1A6EFF' : 'transparent', color: mode === m ? '#fff' : 'rgba(255,255,255,0.35)', fontWeight: mode === m ? 500 : 400 }}
             >
@@ -433,11 +514,33 @@ function BookPage() {
                   </div>
                 </div>
 
+                {/* traveler info fields — shown after flight is selected */}
+                <div style={{ borderTop: '0.5px solid rgba(255,255,255,0.07)', padding: '12px 0', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>who are you booking for?</div>
+                  <input
+                    type="text"
+                    placeholder="traveler name"
+                    value={travelerName}
+                    onChange={e => setTravelerName(e.target.value)}
+                    style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: '11px', padding: '12px 14px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+                  />
+                  <input
+                    type="tel"
+                    placeholder="their phone number"
+                    value={travelerPhone}
+                    onChange={e => setTravelerPhone(e.target.value)}
+                    style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: '11px', padding: '12px 14px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                {bookItError && <div style={{ fontSize: '11px', color: '#FF3B30', marginBottom: '10px' }}>{bookItError}</div>}
+
                 <button
-                  onClick={() => router.push('/sms')}
-                  style={{ width: '100%', background: '#1A6EFF', color: '#fff', border: 'none', padding: '13px', borderRadius: '100px', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}
+                  onClick={handleBookItNext}
+                  disabled={bookItLoading}
+                  style={{ width: '100%', background: bookItLoading ? 'rgba(26,110,255,0.5)' : '#1A6EFF', color: '#fff', border: 'none', padding: '13px', borderRadius: '100px', fontSize: '13px', fontWeight: 500, cursor: bookItLoading ? 'not-allowed' : 'pointer' }}
                 >
-                  next — get traveler info
+                  {bookItLoading ? 'sending...' : 'next — get traveler info'}
                 </button>
               </>
             )}
@@ -509,7 +612,7 @@ function BookPage() {
               flight={selectedFlight}
               insurance={insurance}
               onClose={() => setShowPayment(false)}
-              onSuccess={() => router.push('/sms')}
+              onSuccess={() => router.push('/confirm')}
             />
           </Elements>
         )}
