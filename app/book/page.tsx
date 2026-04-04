@@ -138,16 +138,13 @@ function BookPage() {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
 
-  // shared traveler info for both flows
   const [travelerName, setTravelerName] = useState('');
   const [travelerPhone, setTravelerPhone] = useState('');
 
-  // delegate mode state
   const [tripDate, setTripDate] = useState('');
   const [delegateLoading, setDelegateLoading] = useState(false);
   const [delegateError, setDelegateError] = useState('');
 
-  // i'll book it mode state
   const [bookItLoading, setBookItLoading] = useState(false);
   const [bookItError, setBookItError] = useState('');
 
@@ -277,7 +274,7 @@ function BookPage() {
         return;
       }
 
-      router.push('/confirm');
+      router.push(`/review/${tripRequest.id}`);
     } catch {
       setBookItError('network error. please try again.');
     } finally {
@@ -339,7 +336,7 @@ function BookPage() {
         return;
       }
 
-      router.push('/confirm');
+      router.push(`/review/${tripRequest.id}`);
     } catch {
       setDelegateError('network error. please try again.');
     } finally {
@@ -363,13 +360,11 @@ function BookPage() {
     <div style={{ background: '#080808', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ width: '100%', maxWidth: '390px', minHeight: '100vh', background: '#080808', position: 'relative', padding: '16px 16px 80px' }}>
 
-        {/* header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
           <div onClick={() => router.back()} style={{ width: '26px', height: '26px', background: 'rgba(255,255,255,0.06)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: 'rgba(255,255,255,0.4)', cursor: 'pointer' }}>←</div>
           <h3 style={{ fontSize: '14px', fontWeight: 500, color: '#fff' }}>book a flight</h3>
         </div>
 
-        {/* mode toggle */}
         <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: '100px', padding: '3px', marginBottom: '20px' }}>
           {(['book', 'delegate'] as const).map(m => (
             <div
@@ -391,10 +386,8 @@ function BookPage() {
           ))}
         </div>
 
-        {/* i'll book it mode */}
         {mode === 'book' && (
           <>
-            {/* airport selectors */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
               <div style={{ flex: 1 }}>
                 <div onClick={() => { setShowFromSearch(!showFromSearch); setShowToSearch(false); }} style={{ background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: '11px', padding: '8px 10px', cursor: 'pointer' }}>
@@ -431,7 +424,6 @@ function BookPage() {
               </div>
             </div>
 
-            {/* date + search */}
             <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
               <div style={{ flex: 1, background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: '11px', padding: '8px 10px' }}>
                 <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', marginBottom: '2px' }}>depart</div>
@@ -514,7 +506,6 @@ function BookPage() {
                   </div>
                 </div>
 
-                {/* traveler info fields — shown after flight is selected */}
                 <div style={{ borderTop: '0.5px solid rgba(255,255,255,0.07)', padding: '12px 0', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>who are you booking for?</div>
                   <input
@@ -547,7 +538,6 @@ function BookPage() {
           </>
         )}
 
-        {/* let them pick mode */}
         {mode === 'delegate' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', margin: '0 0 4px', lineHeight: 1.6 }}>
@@ -592,7 +582,6 @@ function BookPage() {
           </div>
         )}
 
-        {/* insurance modal */}
         {showInsModal && (
           <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'flex-end', zIndex: 10 }}>
             <div style={{ background: '#161616', borderRadius: '20px 20px 0 0', padding: '16px', width: '100%' }}>
@@ -605,7 +594,6 @@ function BookPage() {
           </div>
         )}
 
-        {/* payment sheet */}
         {showPayment && selectedFlight && (
           <Elements stripe={stripePromise}>
             <PaymentSheet
@@ -617,7 +605,6 @@ function BookPage() {
           </Elements>
         )}
 
-        {/* bottom nav */}
         <div style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: '390px', display: 'flex', borderTop: '0.5px solid rgba(255,255,255,0.07)', background: '#080808', padding: '10px 0 6px' }}>
           {['home', 'travel', 'profile'].map(t => (
             <div key={t} onClick={() => router.push(`/${t}`)} style={{ flex: 1, textAlign: 'center', fontSize: '9px', color: t === 'travel' ? '#1A6EFF' : 'rgba(255,255,255,0.25)', cursor: 'pointer' }}>
