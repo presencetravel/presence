@@ -210,8 +210,8 @@ function ReviewPage() {
 
   useEffect(() => {
     const fetchTrip = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) { router.push('/'); return }
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) { router.push('/'); return }
 
       const { data, error } = await supabase
         .from('trip_requests')
