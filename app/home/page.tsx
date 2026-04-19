@@ -1,54 +1,154 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase";
 import { BottomTabs } from "../components/BottomTabs";
-import { airports, colors } from "../lib/presenceData";
+import { colors } from "../lib/presenceData";
 
-type Deal = {
-  destination: string;
-  dates: string;
-  type?: string;
-  price: string;
-  savings: string;
+type TripStatus =
+  | "pending"
+  | "traveler_submitted"
+  | "athlete_confirmed"
+  | "booked"
+  | "declined";
+
+type TripRequest = {
+  id: string;
+  status: TripStatus;
+  trip_date: string;
+  traveler_name: string;
 };
 
-const baseDeals: Deal[] = [
-  { destination: "mia", dates: "feb 21-24", type: "nonstop", price: "$89", savings: "save $121" },
-  { destination: "atl", dates: "mar 7-mar 10", type: "nonstop", price: "$67", savings: "save $113" },
-  { destination: "nyc", dates: "feb 28-mar 2", price: "$112", savings: "save $178" },
+type Game = {
+  id: string;
+  opponent: string;
+  date: string;
+  venue: string;
+  daysAway: number;
+};
+
+const PLACEHOLDER_GAMES: Game[] = [
+  {
+    id: "game-1",
+    opponent: "duke",
+    date: "sat, jan 18",
+    venue: "cameron indoor",
+    daysAway: 4,
+  },
+  {
+    id: "game-2",
+    opponent: "carolina",
+    date: "jan 25",
+    venue: "smith center",
+    daysAway: 11,
+  },
+  {
+    id: "game-3",
+    opponent: "wake forest",
+    date: "feb 1",
+    venue: "lawrence joel",
+    daysAway: 18,
+  },
 ];
 
+function getStatusCounts(trips: TripRequest[]) {
+  const booked = trips.filter((t) => t.status === "booked").length;
+  const pending = trips.filter(
+    (t) =>
+      t.status === "pending" ||
+      t.status === "traveler_submitted" ||
+      t.status === "athlete_confirmed"
+  ).length;
+  const total = trips.length;
+  return { booked, pending, total };
+}
+
+function getGameTrips(trips: TripRequest[], date: string) {
+  return trips.filter((t) => t.trip_date === date);
+}
+
 export default function HomePage() {
-  const [originCode, setOriginCode] = useState("RDU");
-  const [isPickerOpen, setIsPickerOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [displayDeals, setDisplayDeals] = useState(baseDeals);
+  const router = useRouter();
+  const supabase = createClient();
+
+  const [initials, setInitials] = useState("--");
+  const [trips, setTrips] = useState<TripRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const nextGame = PLACEHOLDER_GAMES[0];
+  const upcomingGames = PLACEHOLDER_GAMES.slice(1);
+  const nextGameTrips = getGameTrips(trips, nextGame.date);
+  const { booked, pending, total } = getStatusCounts(nextGameTrips);
 
   useEffect(() => {
-    setDisplayDeals(baseDeals);
-  }, [originCode]);
+    async function load() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-  const suggestions = useMemo(() => {
-    const value = query.trim().toLowerCase();
-    if (!value) {
-      return airports.slice(0, 5);
+      if (!user) {
+        router.push("/");
+        return;
+      }
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("full_name, verified")
+        .eq("id", user.id)
+        .single();
+
+      if (profile) {
+        if (!profile.verified) {
+          router.push("/locked");
+          return;
+        }
+        if (profile.full_name) {
+          const parts = (profile.full_name as string).trim().split(" ");
+          const derived =
+            parts.length >= 2
+              ? (parts[0][0] + parts[parts.length - 1][0]).toLowerCase()
+              : parts[0].slice(0, 2).toLowerCase();
+          setInitials(derived);
+        }
+      }
+
+      const { data: tripData } = await supabase
+        .from("trip_requests")
+        .select("id, status, trip_date, traveler_name")
+        .eq("athlete_id", user.id)
+        .order("created_at", { ascending: false });
+
+      if (tripData) {
+        setTrips(tripData as TripRequest[]);
+      }
+
+      setLoading(false);
     }
-    return airports
-      .filter((airport) => {
-        return (
-          airport.code.toLowerCase().includes(value) ||
-          airport.city.includes(value) ||
-          airport.name.includes(value)
-        );
-      })
-      .slice(0, 6);
-  }, [query]);
+
+    load();
+  }, []);
+
+  if (loading) {
+    return (
+      <div
+        style={{
+          minHeight: "100dvh",
+          background: colors.bg,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <span style={{ color: "#333", fontSize: "13px" }}>loading</span>
+      </div>
+    );
+  }
 
   return (
     <main
       style={{
-        minHeight: "100vh",
+        minHeight: "100dvh",
         background: colors.bg,
         color: colors.white,
         display: "flex",
@@ -60,172 +160,421 @@ export default function HomePage() {
         style={{
           width: "100%",
           maxWidth: "390px",
-          minHeight: "100vh",
+          minHeight: "100dvh",
           display: "flex",
           flexDirection: "column",
+          paddingBottom: "90px",
         }}
       >
-        <header style={{ marginTop: "6px", marginBottom: "16px" }}>
-          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px" }}>
-            <div>
-              <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.48)", marginBottom: "4px" }}>good morning,</p>
-              <p style={{ fontSize: "16px", fontWeight: 500 }}>marcus</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setIsPickerOpen((prev) => !prev)}
-              style={{
-                border: "none",
-                borderRadius: "100px",
-                minHeight: "34px",
-                padding: "0 12px",
-                background: colors.blue,
-                color: "#ffffff",
-                fontSize: "13px",
-                fontWeight: 500,
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {originCode} edit
-            </button>
-          </div>
-
-          {isPickerOpen && (
-            <div style={{ marginTop: "10px" }}>
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="search city or airport code..."
-                style={{
-                  width: "100%",
-                  background: "rgba(255,255,255,0.05)",
-                  border: colors.border,
-                  color: "#ffffff",
-                  padding: "10px 12px",
-                  borderRadius: "11px",
-                  fontSize: "13px",
-                  outline: "none",
-                  boxSizing: "border-box",
-                }}
-              />
-              <div
-                style={{
-                  marginTop: "6px",
-                  border: colors.border,
-                  borderRadius: "11px",
-                  overflow: "hidden",
-                  background: "#111111",
-                }}
-              >
-                {suggestions.map((airport) => (
-                  <button
-                    key={airport.code}
-                    type="button"
-                    onClick={() => {
-                      setOriginCode(airport.code);
-                      setIsPickerOpen(false);
-                      setQuery("");
-                    }}
-                    style={{
-                      width: "100%",
-                      border: "none",
-                      borderBottom: "1px solid rgba(255,255,255,0.06)",
-                      background: "transparent",
-                      padding: "10px 12px",
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      color: "rgba(255,255,255,0.76)",
-                      fontSize: "12px",
-                      cursor: "pointer",
-                      textAlign: "left",
-                    }}
-                  >
-                    <span>{airport.city}</span>
-                    <span style={{ color: colors.blue, fontWeight: 500 }}>{airport.code}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </header>
-
-        <section
+        <header
           style={{
-            border: colors.border,
-            background: "rgba(26,110,255,0.14)",
-            borderRadius: "11px",
-            padding: "14px",
-            marginBottom: "18px",
+            marginTop: "6px",
+            marginBottom: "20px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
           }}
         >
-          <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.66)", marginBottom: "8px" }}>next home game</p>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
-            <div>
-              <h1 style={{ fontSize: "18px", fontWeight: 600, marginBottom: "4px" }}>next home game</h1>
-              <p style={{ fontSize: "13px", color: "rgba(255,255,255,0.8)" }}>feb 14 · 7:00 pm</p>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <p style={{ fontSize: "28px", fontWeight: 600, lineHeight: 1, color: colors.blue, marginBottom: "4px" }}>12</p>
-              <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.62)" }}>days away</p>
-            </div>
-          </div>
-          <Link
-            href="/book"
+          <span
             style={{
-              width: "100%",
-              border: "none",
-              background: colors.blue,
-              color: "#ffffff",
-              borderRadius: "100px",
-              minHeight: "42px",
-              fontSize: "13px",
-              fontWeight: 500,
-              textDecoration: "none",
-              display: "inline-flex",
+              fontSize: "22px",
+              fontWeight: 600,
+              letterSpacing: "-0.5px",
+              color: colors.white,
+            }}
+          >
+            <span style={{ color: "#1A6EFF" }}>p</span>resence
+          </span>
+
+          <button
+            type="button"
+            onClick={() => router.push("/profile")}
+            style={{
+              width: "36px",
+              height: "36px",
+              borderRadius: "50%",
+              background: "#1a1a1a",
+              border: "1px solid #2a2a2a",
+              display: "flex",
               alignItems: "center",
               justifyContent: "center",
               cursor: "pointer",
             }}
           >
-            make it happen.
-          </Link>
-        </section>
+            <span style={{ color: "#888", fontSize: "13px", fontWeight: 500 }}>
+              {initials}
+            </span>
+          </button>
+        </header>
 
-        <section style={{ marginBottom: "18px" }}>
-          <p style={{ fontSize: "12px", color: "rgba(255,255,255,0.62)", marginBottom: "8px" }}>deals from {originCode}</p>
-          <div style={{ display: "grid", gap: "8px" }}>
-            {displayDeals.map((deal) => (
-              <article
-                key={deal.destination}
+        <section style={{ marginBottom: "20px" }}>
+          <p
+            style={{
+              fontSize: "12px",
+              color: "#555",
+              margin: "0 0 12px",
+              letterSpacing: "0.5px",
+              textTransform: "uppercase",
+            }}
+          >
+            next game
+          </p>
+
+          <div
+            style={{
+              background: "#0f0f0f",
+              borderRadius: "11px",
+              padding: "20px",
+              border: "1px solid #1e1e1e",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                marginBottom: "20px",
+              }}
+            >
+              <div>
+                <p
+                  style={{
+                    fontSize: "18px",
+                    fontWeight: 600,
+                    color: colors.white,
+                    margin: "0 0 4px",
+                  }}
+                >
+                  vs. {nextGame.opponent}
+                </p>
+                <p style={{ fontSize: "13px", color: "#555", margin: 0 }}>
+                  {nextGame.date} · {nextGame.venue}
+                </p>
+              </div>
+              <div
                 style={{
-                  border: colors.border,
-                  borderRadius: "11px",
-                  padding: "11px 12px",
-                  background: colors.card,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: "10px",
+                  background: "#1A6EFF18",
+                  border: "1px solid #1A6EFF40",
+                  borderRadius: "100px",
+                  padding: "4px 12px",
+                  flexShrink: 0,
                 }}
               >
-                <div>
-                  <p style={{ fontSize: "14px", fontWeight: 500, marginBottom: "4px" }}>
-                    {originCode} {"->"} {deal.destination}
-                  </p>
-                  <p style={{ fontSize: "12px", color: "rgba(255,255,255,0.66)" }}>
-                    {deal.dates} {deal.type ? `· ${deal.type}` : ""}
-                  </p>
+                <span
+                  style={{
+                    color: "#1A6EFF",
+                    fontSize: "11px",
+                    fontWeight: 500,
+                  }}
+                >
+                  {nextGame.daysAway === 0
+                    ? "today"
+                    : nextGame.daysAway === 1
+                    ? "tomorrow"
+                    : `${nextGame.daysAway} days`}
+                </span>
+              </div>
+            </div>
+
+            <p
+              style={{
+                fontSize: "11px",
+                color: "#444",
+                margin: "0 0 10px",
+                letterSpacing: "0.4px",
+                textTransform: "uppercase",
+              }}
+            >
+              who's coming
+            </p>
+
+            <button
+              type="button"
+              onClick={() => router.push("/book")}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                background: "transparent",
+                borderRadius: "100px",
+                padding: "8px 16px",
+                border: "1px dashed #333",
+                cursor: "pointer",
+              }}
+            >
+              <span style={{ color: "#555", fontSize: "14px" }}>
+                + invite someone
+              </span>
+            </button>
+
+            <div
+              style={{
+                marginTop: "16px",
+                paddingTop: "16px",
+                borderTop: "1px solid #1a1a1a",
+                display: "flex",
+                gap: "8px",
+              }}
+            >
+              <div
+                style={{
+                  flex: 1,
+                  background: "#1a1a1a",
+                  borderRadius: "8px",
+                  padding: "10px",
+                  textAlign: "center",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "4px",
+                    marginBottom: "2px",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "6px",
+                      height: "6px",
+                      borderRadius: "50%",
+                      background: "#22c55e",
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span style={{ color: "#22c55e", fontSize: "11px" }}>
+                    booked
+                  </span>
                 </div>
-                <div style={{ textAlign: "right" }}>
-                  <p style={{ fontSize: "18px", fontWeight: 600, marginBottom: "3px" }}>{deal.price}</p>
-                  <p style={{ fontSize: "12px", color: colors.blue }}>{deal.savings}</p>
+                <span
+                  style={{
+                    color: colors.white,
+                    fontSize: "18px",
+                    fontWeight: 600,
+                  }}
+                >
+                  {booked}
+                </span>
+              </div>
+
+              <div
+                style={{
+                  flex: 1,
+                  background: "#1a1a1a",
+                  borderRadius: "8px",
+                  padding: "10px",
+                  textAlign: "center",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "4px",
+                    marginBottom: "2px",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "6px",
+                      height: "6px",
+                      borderRadius: "50%",
+                      background: "#f59e0b",
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span style={{ color: "#f59e0b", fontSize: "11px" }}>
+                    pending
+                  </span>
                 </div>
-              </article>
-            ))}
+                <span
+                  style={{
+                    color: colors.white,
+                    fontSize: "18px",
+                    fontWeight: 600,
+                  }}
+                >
+                  {pending}
+                </span>
+              </div>
+
+              <div
+                style={{
+                  flex: 1,
+                  background: "#1a1a1a",
+                  borderRadius: "8px",
+                  padding: "10px",
+                  textAlign: "center",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "4px",
+                    marginBottom: "2px",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "6px",
+                      height: "6px",
+                      borderRadius: "50%",
+                      background: "#333",
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span style={{ color: "#444", fontSize: "11px" }}>
+                    invited
+                  </span>
+                </div>
+                <span
+                  style={{
+                    color: colors.white,
+                    fontSize: "18px",
+                    fontWeight: 600,
+                  }}
+                >
+                  {total}
+                </span>
+              </div>
+            </div>
           </div>
         </section>
+
+        <section>
+          <p
+            style={{
+              fontSize: "12px",
+              color: "#555",
+              margin: "0 0 12px",
+              letterSpacing: "0.5px",
+              textTransform: "uppercase",
+            }}
+          >
+            coming up
+          </p>
+
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: "10px" }}
+          >
+            {upcomingGames.map((game) => {
+              const gameTrips = getGameTrips(trips, game.date);
+              const { booked: gb, pending: gp } = getStatusCounts(gameTrips);
+              const hasGuests = gb + gp > 0;
+
+              return (
+                <div
+                  key={game.id}
+                  style={{
+                    background: "#0f0f0f",
+                    borderRadius: "11px",
+                    padding: "16px 20px",
+                    border: "1px solid #1e1e1e",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "12px",
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <p
+                      style={{
+                        fontSize: "15px",
+                        fontWeight: 500,
+                        color: colors.white,
+                        margin: "0 0 3px",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      vs. {game.opponent}
+                    </p>
+                    <p style={{ fontSize: "12px", color: "#444", margin: 0 }}>
+                      {game.date} · {game.venue}
+                    </p>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {hasGuests ? (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "4px",
+                        }}
+                      >
+                        {gb > 0 && (
+                          <>
+                            <div
+                              style={{
+                                width: "6px",
+                                height: "6px",
+                                borderRadius: "50%",
+                                background: "#22c55e",
+                              }}
+                            />
+                            <span style={{ color: "#555", fontSize: "12px" }}>
+                              {gb}
+                            </span>
+                          </>
+                        )}
+                        {gp > 0 && (
+                          <>
+                            <div
+                              style={{
+                                width: "6px",
+                                height: "6px",
+                                borderRadius: "50%",
+                                background: "#f59e0b",
+                                marginLeft: gb > 0 ? "4px" : "0",
+                              }}
+                            />
+                            <span style={{ color: "#555", fontSize: "12px" }}>
+                              {gp}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    ) : (
+                      <span style={{ color: "#333", fontSize: "12px" }}>
+                        no guests yet
+                      </span>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => router.push("/book")}
+                      style={{
+                        background: "transparent",
+                        borderRadius: "100px",
+                        padding: "5px 14px",
+                        border: "1px dashed #333",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <span style={{ color: "#555", fontSize: "12px" }}>
+                        + invite
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
         <BottomTabs active="home" />
       </div>
     </main>

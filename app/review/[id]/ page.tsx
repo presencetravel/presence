@@ -1,14 +1,11 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from '@/lib/supabase'
 import { Elements, CardElement, useStripe, useElements, PaymentRequestButtonElement } from '@stripe/react-stripe-js'
 import { stripePromise } from '@/lib/stripe'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+const supabase = createClient()
 
 type TripRequest = {
   id: string
@@ -225,14 +222,17 @@ function ReviewPage() {
         return
       }
 
-      if (data.status !== 'traveler_submitted') {
+      const trip = data as unknown as TripRequest
+
+      if (trip.status !== 'traveler_submitted') {
         setError('this trip is not ready for review.')
         setLoading(false)
         return
       }
 
-      setTrip(data)
-      setLivePrice(data.selected_offer_data?.price ?? data.total_amount)
+      setTrip(trip)
+      const offerPrice = trip.selected_offer_data?.price ?? null
+      setLivePrice(offerPrice ?? trip.total_amount ?? 0)
       setLoading(false)
     }
 
@@ -287,11 +287,12 @@ function ReviewPage() {
 
   const handlePaymentSuccess = async () => {
     if (!trip) return
+    const safePrice = livePrice ?? 0
     await supabase
       .from('trip_requests')
       .update({
         status: 'athlete_confirmed',
-        total_amount: livePrice! + Math.round((livePrice! * 0.08) * 100) / 100 + (insurance ? 12 : 0)
+        total_amount: safePrice + Math.round((safePrice * 0.08) * 100) / 100 + (insurance ? 12 : 0)
       })
       .eq('id', trip.id)
     router.push('/confirm')
