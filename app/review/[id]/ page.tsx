@@ -295,7 +295,7 @@ function ReviewPage() {
         total_amount: safePrice + Math.round((safePrice * 0.08) * 100) / 100 + (insurance ? 12 : 0)
       })
       .eq('id', trip.id)
-    router.push('/confirm')
+    router.push(`/confirm?id=${trip.id}`)
   }
 
   if (loading) {
